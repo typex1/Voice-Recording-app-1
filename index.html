@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Recording App</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Voice Recording App</h1>
+            <p>Record your voice message (up to 2 minutes) and get it transcribed</p>
+        </header>
+
+        <main>
+            <div class="recorder-container">
+                <div class="timer" id="timer">00:00</div>
+                
+                <div class="visualizer-container">
+                    <canvas id="visualizer"></canvas>
+                </div>
+                
+                <div class="controls">
+                    <button id="recordButton" class="btn record">Record</button>
+                    <button id="stopButton" class="btn stop" disabled>Stop</button>
+                    <button id="playButton" class="btn play" disabled>Play</button>
+                </div>
+                
+                <div class="status" id="status">Ready to record</div>
+            </div>
+
+            <div class="transcription-container">
+                <h2>Transcription</h2>
+                <div class="transcription-result" id="transcriptionResult">
+                    <p class="placeholder">Your transcription will appear here after recording</p>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by AWS Transcribe</p>
+        </footer>
+    </div>
+
+    <script src="recorder.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
