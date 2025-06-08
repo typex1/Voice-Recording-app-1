@@ -1,0 +1,299 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Voice Recording App with Amazon Transcribe Integration
+
+Parameters:
+  DestinationBucketName:
+    Type: String
+    Description: Name of the existing S3 bucket where transcribed text will be stored
+    
+  Stage:
+    Type: String
+    Default: prod
+    Description: Deployment stage (e.g., dev, test, prod)
+    
+  RetentionPeriod:
+    Type: Number
+    Default: 7
+    Description: Number of days to retain temporary audio files
+
+Resources:
+  # S3 Bucket for temporary audio storage
+  TempBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-temp-audio-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - "*"
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteAfterRetentionPeriod
+            Status: Enabled
+            ExpirationInDays: !Ref RetentionPeriod
+            TagFilters:
+              - Key: Expiration
+                Value: true
+
+  # S3 Bucket for frontend hosting
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-frontend-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+            AllowedOrigins:
+              - "*"
+
+  # S3 Bucket Policy for frontend bucket
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Resource: !Sub "arn:aws:s3:::${FrontendBucket}/*"
+            Principal: "*"
+
+  # DynamoDB Table for tracking transcription jobs
+  TranscriptionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-TranscriptionJobs"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jobId
+          AttributeType: S
+        - AttributeName: transcriptionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jobId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: TranscriptionIdIndex
+          KeySchema:
+            - AttributeName: transcriptionId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  # Lambda Functions
+  PreProcessFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: preProcessFunction.handler
+      Runtime: nodejs14.x
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          TEMP_BUCKET_NAME: !Ref TempBucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref TempBucket
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /get-upload-url
+            Method: post
+            RestApiId: !Ref ApiGateway
+
+  TranscriptionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: transcriptionFunction.handler
+      Runtime: nodejs14.x
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          TEMP_BUCKET_NAME: !Ref TempBucket
+          TRANSCRIPTION_TABLE: !Ref TranscriptionTable
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref TempBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TranscriptionTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - transcribe:StartTranscriptionJob
+                - transcribe:GetTranscriptionJob
+              Resource: "*"
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /transcribe
+            Method: post
+            RestApiId: !Ref ApiGateway
+
+  PostProcessFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: postProcessFunction.handler
+      Runtime: nodejs14.x
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          TEMP_BUCKET_NAME: !Ref TempBucket
+          DESTINATION_BUCKET_NAME: !Ref DestinationBucketName
+          TRANSCRIPTION_TABLE: !Ref TranscriptionTable
+          RETENTION_PERIOD: !Ref RetentionPeriod
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref TempBucket
+        - S3CrudPolicy:
+            BucketName: !Ref DestinationBucketName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TranscriptionTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - transcribe:GetTranscriptionJob
+              Resource: "*"
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /transcription-status
+            Method: get
+            RestApiId: !Ref ApiGateway
+
+  GetTranscriptionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/
+      Handler: getTranscriptionFunction.handler
+      Runtime: nodejs14.x
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          DESTINATION_BUCKET_NAME: !Ref DestinationBucketName
+          TRANSCRIPTION_TABLE: !Ref TranscriptionTable
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref DestinationBucketName
+        - DynamoDBReadPolicy:
+            TableName: !Ref TranscriptionTable
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /transcription
+            Method: get
+            RestApiId: !Ref ApiGateway
+
+  # API Gateway
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Stage
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: NONE
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            Id: S3Origin
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - DomainName: !Sub "${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            Id: ApiOrigin
+            OriginPath: !Sub "/${Stage}"
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+        Enabled: true
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CacheBehaviors:
+          - PathPattern: "/api/*"
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: https-only
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            ForwardedValues:
+              QueryString: true
+              Headers:
+                - Authorization
+              Cookies:
+                Forward: none
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Stage}"
+    
+  FrontendBucketName:
+    Description: S3 bucket for frontend hosting
+    Value: !Ref FrontendBucket
+    
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+    
+  CloudFrontDomainName:
+    Description: CloudFront Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName

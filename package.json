@@ -1,0 +1,30 @@
+{
+  "name": "voice-recording-app",
+  "version": "1.0.0",
+  "description": "A web application for recording voice messages and transcribing them using Amazon Transcribe",
+  "main": "app.js",
+  "scripts": {
+    "test": "jest",
+    "start": "http-server -p 8080",
+    "deploy:frontend": "aws s3 sync . s3://your-frontend-bucket --exclude \"*\" --include \"*.html\" --include \"*.css\" --include \"*.js\" --exclude \"lambda/*\" --exclude \"tests/*\" --exclude \"node_modules/*\"",
+    "deploy:backend": "sam deploy --guided"
+  },
+  "keywords": [
+    "voice",
+    "recording",
+    "transcription",
+    "aws",
+    "amazon",
+    "transcribe"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "aws-sdk": "^2.1048.0",
+    "uuid": "^8.3.2"
+  },
+  "devDependencies": {
+    "http-server": "^14.0.0",
+    "jest": "^27.4.7"
+  }
+}
